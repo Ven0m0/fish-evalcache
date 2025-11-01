@@ -5,7 +5,7 @@
 
 ## Install
 ```fish
-fisher install kyohsuke/fish-evalcache
+fisher install Ven0m0/fish-evalcache
 ```
 
 ## Usage
