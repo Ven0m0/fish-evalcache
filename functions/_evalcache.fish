@@ -16,7 +16,7 @@ function _evalcache
   else if type -q $argv[1]
     echo "$argv[1] init not cached, caching: $argv" >&2
     mkdir -p "$FISH_EVALCACHE_DIR"
-    rm -f "$FISH_EVALCACHE_DIR/init-$cmd-"*".fish"
+    rm -f $FISH_EVALCACHE_DIR/init-$cmd-*.fish 2>/dev/null
     $argv >$cacheFile
     source "$cacheFile"
   else
