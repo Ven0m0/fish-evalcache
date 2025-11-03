@@ -17,12 +17,18 @@ function _evalcache
     echo "$argv[1] init not cached, caching: $argv" >&2
     mkdir -p "$FISH_EVALCACHE_DIR"
     rm -f $FISH_EVALCACHE_DIR/init-$cmd-*.fish 2>/dev/null
-    if not $argv >$cacheFile 2>&1
-      echo "evalcache ERROR: $argv[1] init failed" >&2
+    if $argv >$cacheFile 2>&1
+      test -s "$cacheFile";or begin
+        echo "evalcache ERROR: $argv[1] produced empty output" >&2
+        rm -f "$cacheFile"
+        return 1
+      end
+      source "$cacheFile"
+    else
+      echo "evalcache ERROR: $argv[1] exited with status $status" >&2
       rm -f "$cacheFile"
       return 1
     end
-    source "$cacheFile"
   else
     echo "evalcache ERROR: $argv[1] not found" >&2
     return 1
