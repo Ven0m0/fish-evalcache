@@ -46,11 +46,7 @@ function _evalcache -d "Cache command output with exec mtime tracking"
   end
   # Get exec mtime (stat -c for Linux, -f for BSD/macOS)
   set -l mtime
-  if stat -c %Y "$exec_path" &>/dev/null
-    set mtime (stat -c %Y "$exec_path")
-  else
-    set mtime (stat -f %m "$exec_path" 2>/dev/null)
-  end
+  set mtime (stat -c %Y "$exec_path")
   test -n "$mtime"; or set mtime 0
   # Check memory cache first (fastest path)
   if set -q $key
