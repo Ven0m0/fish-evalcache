@@ -18,6 +18,7 @@ function _evalcache -d "Cache command output with exec mtime tracking"
       set -l hash $__evalcache_entries[$argv[2]]
       set -e __evalcache_{$hash}
       set -e __evalcache_entries[$argv[2]]
+      rm -f "$FISH_EVALCACHE_DIR/$hash.fish" 2>/dev/null
       return
     case -c --clear
       for hash in $__evalcache_entries
@@ -29,7 +30,6 @@ function _evalcache -d "Cache command output with exec mtime tracking"
   end
   set -q FISH_EVALCACHE_DIR; or set -gx FISH_EVALCACHE_DIR "$HOME/.cache/fish-evalcache"
   set -q __EVALCACHE_RUNNING; and command $argv; and return
-  # Fast hash: use builtin string if available, fallback to md5sum/md5
   set -l hash
   if command -sq md5sum
     set hash (string join \n $argv | md5sum | string split -f1 ' ')
@@ -44,16 +44,11 @@ function _evalcache -d "Cache command output with exec mtime tracking"
     echo "evalcache: command '$argv[1]' not found" >&2
     return 127
   end
-  # Get exec mtime (stat -c for Linux, -f for BSD/macOS)
-  set -l mtime
-  set mtime (stat -c %Y "$exec_path")
-  test -n "$mtime"; or set mtime 0
-  # Check memory cache first (fastest path)
+  set -l mtime (stat -c %Y "$exec_path" 2>/dev/null; or stat -f %m "$exec_path" 2>/dev/null; or echo 0)
   if set -q $key
     set -l cached $$key
     test $mtime -le $cached[2]; and echo -e $cached[3]; and return
   end
-  # Check disk cache
   set -l cache_file "$FISH_EVALCACHE_DIR/$hash.fish"
   if test -f "$cache_file"
     set -l file_mtime (stat -c %Y "$cache_file" 2>/dev/null; or stat -f %m "$cache_file" 2>/dev/null; or echo 0)
@@ -65,8 +60,6 @@ function _evalcache -d "Cache command output with exec mtime tracking"
       return
     end
   end
-  # Generate cache
-  echo "evalcache: caching '$argv[1]'" >&2
   mkdir -p "$FISH_EVALCACHE_DIR"
   set -gx __EVALCACHE_RUNNING 1
   set -l output (command $argv 2>&1)
@@ -76,7 +69,6 @@ function _evalcache -d "Cache command output with exec mtime tracking"
     echo "evalcache: command failed or empty output (status $status_code)" >&2
     return $status_code
   end
-  # Store in memory and disk
   echo -e "$output" > "$cache_file"
   set -U $key "$argv[1]" $mtime "$output"
   set -Ua __evalcache_entries $hash
