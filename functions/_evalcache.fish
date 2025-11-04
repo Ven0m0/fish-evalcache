@@ -1,6 +1,5 @@
 function _evalcache -d "Cache command output with exec mtime tracking"
   set -q argv[1]; or return
-  # Management flags
   switch "$argv[1]"
     case -l --list
       set -l i 1
