@@ -1,59 +1,89 @@
-function _evalcache
-  test (count $argv) -eq 0; and return
-  test -z "$FISH_EVALCACHE_DIR"; and set -gx FISH_EVALCACHE_DIR "$HOME/.fish-evalcache"
-  set -l cmd (string split -m1 / $argv[1])[-1]
-  set -l cmdHash noHash
+function _evalcache -d "Cache command output with exec mtime tracking"
+  set -q argv[1]; or return
+  # Management flags
+  switch "$argv[1]"
+    case -l --list
+      set -l i 1
+      echo -e "No.\tCommand\tMtime"
+      for hash in $__evalcache_entries
+        set -l key __evalcache_$hash
+        set -q $key; or continue
+        set -l data $$key
+        echo -e "$i\t$data[1]\t$data[2]"
+        set i (math $i + 1)
+      end
+      return
+    case -e --erase
+      set -q argv[2]; or return 1
+      set -q __evalcache_entries[$argv[2]]; or return 1
+      set -l hash $__evalcache_entries[$argv[2]]
+      set -e __evalcache_{$hash}
+      set -e __evalcache_entries[$argv[2]]
+      return
+    case -c --clear
+      for hash in $__evalcache_entries
+        set -e __evalcache_{$hash}
+      end
+      set -e __evalcache_entries
+      set -q FISH_EVALCACHE_DIR; and rm -rf "$FISH_EVALCACHE_DIR"
+      return
+  end
+  set -q FISH_EVALCACHE_DIR; or set -gx FISH_EVALCACHE_DIR "$HOME/.cache/fish-evalcache"
+  set -q __EVALCACHE_RUNNING; and command $argv; and return
+  # Fast hash: use builtin string if available, fallback to md5sum/md5
+  set -l hash
   if command -sq md5sum
-    set cmdHash (string join -- \n $argv | md5sum | string split -f1 ' ')
+    set hash (string join \n $argv | md5sum | string split -f1 ' ')
   else if command -sq md5
-    set cmdHash (string join -- \n $argv | md5)
-  end
-  set -l cacheFile "$FISH_EVALCACHE_DIR/init-$cmd-$cmdHash.fish"
-  # Reentrancy guard: if we're already generating a cache, don't recurse - just run the command.
-  if set -q __EVALCACHE_RUNNING
-    command $argv
-    return $status
-  end
-  # If disabled, just run and source (if appropriate) — preserve previous behavior but not caching.
-  if test "$FISH_EVALCACHE_DISABLE" = true
-    command $argv | source
-    return $status
-  end
-  # If cache exists, source it.
-  if test -s "$cacheFile"
-    source "$cacheFile"
-    return $status
-  end
-  # Ensure command exists.
-  if not type -q -- $argv[1]
-    echo "evalcache ERROR: command '$argv[1]' not found" >&2
-    return 1
-  end
-  echo "$argv[1] init not cached, caching: $argv" >&2
-  mkdir -p "$FISH_EVALCACHE_DIR"
-  # remove previous cache files quietly
-  rm -f $FISH_EVALCACHE_DIR/init-$cmd-*.fish 2>/dev/null
-  # mark we are generating to avoid recursion
-  set -gx __EVALCACHE_RUNNING 1
-  # Run the command via `command` (avoid function/alias shadowing). Capture stdout/stderr into cacheFile.
-  # On success + non-empty output -> source it. Otherwise remove cache and report error.
-  if command $argv >"$cacheFile" 2>&1
-    set -l stat $status
-    if test $stat -eq 0 -a -s "$cacheFile"
-      set -e __EVALCACHE_RUNNING
-      source "$cacheFile"
-      return 0
-    else
-      echo "evalcache ERROR: '$argv[1]' init produced empty output or non-zero status ($stat)" >&2
-      rm -f "$cacheFile"
-      set -e __EVALCACHE_RUNNING
-      return $stat
-    end
+    set hash (string join \n $argv | md5)
   else
-    set -l stat $status
-    echo "evalcache ERROR: '$argv[1]' init failed (status $stat)" >&2
-    rm -f "$cacheFile"
-    set -e __EVALCACHE_RUNNING
-    return $stat
+    set hash (string join _ $argv | string replace -ra '[^a-zA-Z0-9_-]' _)
   end
+  set -l key __evalcache_$hash
+  set -l exec_path (command -v $argv[1] 2>/dev/null)
+  test -n "$exec_path"; or begin
+    echo "evalcache: command '$argv[1]' not found" >&2
+    return 127
+  end
+  # Get exec mtime (stat -c for Linux, -f for BSD/macOS)
+  set -l mtime
+  if stat -c %Y "$exec_path" &>/dev/null
+    set mtime (stat -c %Y "$exec_path")
+  else
+    set mtime (stat -f %m "$exec_path" 2>/dev/null)
+  end
+  test -n "$mtime"; or set mtime 0
+  # Check memory cache first (fastest path)
+  if set -q $key
+    set -l cached $$key
+    test $mtime -le $cached[2]; and echo -e $cached[3]; and return
+  end
+  # Check disk cache
+  set -l cache_file "$FISH_EVALCACHE_DIR/$hash.fish"
+  if test -f "$cache_file"
+    set -l file_mtime (stat -c %Y "$cache_file" 2>/dev/null; or stat -f %m "$cache_file" 2>/dev/null; or echo 0)
+    if test $mtime -le $file_mtime
+      set -l output (cat "$cache_file")
+      set -U $key "$argv[1]" $mtime "$output"
+      set -Ua __evalcache_entries $hash
+      echo -e "$output"
+      return
+    end
+  end
+  # Generate cache
+  echo "evalcache: caching '$argv[1]'" >&2
+  mkdir -p "$FISH_EVALCACHE_DIR"
+  set -gx __EVALCACHE_RUNNING 1
+  set -l output (command $argv 2>&1)
+  set -l status_code $status
+  set -e __EVALCACHE_RUNNING
+  test $status_code -eq 0 -a -n "$output"; or begin
+    echo "evalcache: command failed or empty output (status $status_code)" >&2
+    return $status_code
+  end
+  # Store in memory and disk
+  echo -e "$output" > "$cache_file"
+  set -U $key "$argv[1]" $mtime "$output"
+  set -Ua __evalcache_entries $hash
+  echo -e "$output"
 end
